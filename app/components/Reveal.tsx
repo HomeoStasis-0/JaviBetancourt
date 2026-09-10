@@ -18,9 +18,19 @@ export default function Reveal({
     const el = ref.current;
     if (!el) return;
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      // One-time sync of a browser-only capability check, not available during SSR.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+    const alreadyOnScreen = () => {
+      const rect = el.getBoundingClientRect();
+      return rect.top < window.innerHeight && rect.bottom > 0;
+    };
+
+    if (
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      alreadyOnScreen()
+    ) {
+      // One-time sync of a browser-only check, not available during SSR:
+      // reduced-motion preference, or the element already being in view at
+      // mount (skips the async IntersectionObserver round-trip so on-screen
+      // content doesn't sit invisible for an extra frame).
       setVisible(true);
       return;
     }
