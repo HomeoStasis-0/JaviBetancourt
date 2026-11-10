@@ -95,7 +95,7 @@ export const SLIDES: Slide[] = [
 ];
 
 export const NAV_GROUPS: { label: string; group: SlideGroup }[] = [
-  { label: "Intro", group: "intro" },
+  { label: "Home", group: "intro" },
   { label: "About", group: "about" },
   { label: "Projects", group: "projects" },
   { label: "Skills", group: "skills" },
