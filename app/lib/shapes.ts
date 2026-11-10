@@ -2,6 +2,13 @@ import * as THREE from "three";
 
 export type Shape = {
   object: THREE.Object3D;
+  /** Optional pointer interaction. Coordinates are CSS pixels in the viewport. */
+  interact?: {
+    /** Highlight the node under the pointer (pass null when there is no pointer). Returns true if over a node. */
+    hover: (px: number | null, py: number | null, camera: THREE.Camera, w: number, h: number) => boolean;
+    /** Fire a signal from the hovered / nearest node. Returns true if something was activated. */
+    activate: (animated: boolean) => boolean;
+  };
   update: (time: number, dt: number) => void;
   dispose: () => void;
 };
@@ -115,13 +122,25 @@ function neural(): Shape {
   );
   const lines: number[] = [];
   const conns: [THREE.Vector3, THREE.Vector3][] = [];
+  const connIdx: [number, number][] = [];
+  const offsets: number[] = [];
+  const layerOf: number[] = [];
+  {
+    let o = 0;
+    layers.forEach((L, li) => {
+      offsets.push(o);
+      L.forEach(() => layerOf.push(li));
+      o += L.length;
+    });
+  }
   for (let l = 0; l < layers.length - 1; l++) {
-    for (const a of layers[l]) {
-      for (const b of layers[l + 1]) {
+    layers[l].forEach((a, ia) => {
+      layers[l + 1].forEach((b, ib) => {
         lines.push(a.x, a.y, a.z, b.x, b.y, b.z);
         conns.push([a, b]);
-      }
-    }
+        connIdx.push([offsets[l] + ia, offsets[l + 1] + ib]);
+      });
+    });
   }
   const lineGeo = track(new THREE.BufferGeometry());
   lineGeo.setAttribute("position", new THREE.Float32BufferAttribute(lines, 3));
@@ -203,8 +222,192 @@ function neural(): Shape {
   g.add(glyphs.group);
   g.rotation.z = 0.1;
 
+  // ---- interaction: hover a node to light its connections; click or tap to fire a signal through the network ----
+  const N = all.length;
+  const baseCol = nc.slice();
+  const flash = new Float32Array(N);
+  const connsOf: number[][] = Array.from({ length: N }, () => []);
+  connIdx.forEach(([a, b], c) => {
+    connsOf[a].push(c);
+    connsOf[b].push(c);
+  });
+
+  const addMat = (color: string, opacity: number, size?: number) =>
+    size === undefined
+      ? track(
+          new THREE.LineBasicMaterial({
+            color,
+            transparent: true,
+            opacity,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            toneMapped: false,
+          })
+        )
+      : track(
+          new THREE.PointsMaterial({
+            size,
+            map: glow,
+            color,
+            transparent: true,
+            opacity,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            toneMapped: false,
+          })
+        );
+
+  const MAXH = 24;
+  const hiPos = new Float32Array(MAXH * 6);
+  const hiGeo = track(new THREE.BufferGeometry());
+  hiGeo.setAttribute("position", new THREE.BufferAttribute(hiPos, 3));
+  hiGeo.setDrawRange(0, 0);
+  const hiLines = new THREE.LineSegments(hiGeo, addMat("#bfeaff", 0.95) as THREE.LineBasicMaterial);
+  hiLines.frustumCulled = false;
+  g.add(hiLines);
+
+  const hoverGeo = track(new THREE.BufferGeometry());
+  const hoverPos = new Float32Array(3);
+  hoverGeo.setAttribute("position", new THREE.BufferAttribute(hoverPos, 3));
+  const hoverPt = new THREE.Points(hoverGeo, addMat("#ffffff", 0.9, 0.6) as THREE.PointsMaterial);
+  hoverPt.visible = false;
+  hoverPt.frustumCulled = false;
+  g.add(hoverPt);
+
+  const CP = 300;
+  const HOP = 0.3; // seconds per layer hop
+  const cpGeo = track(new THREE.BufferGeometry());
+  const cpPos = new Float32Array(CP * 3);
+  for (let i = 0; i < CP; i++) cpPos[i * 3 + 1] = 1e4;
+  cpGeo.setAttribute("position", new THREE.BufferAttribute(cpPos, 3));
+  const cpPts = new THREE.Points(cpGeo, addMat("#ffd2f4", 1, 0.2) as THREE.PointsMaterial);
+  cpPts.frustumCulled = false;
+  g.add(cpPts);
+  const cp = Array.from({ length: CP }, () => ({ on: false, a: 0, b: 0, t: 0 }));
+
+  let hover = -1;
+  let nearest = -1;
+  let nearestD = 1e9;
+  const tmp = new THREE.Vector3();
+  const setHover = (h: number) => {
+    if (h === hover) return;
+    hover = h;
+    if (h < 0) {
+      hiGeo.setDrawRange(0, 0);
+      hoverPt.visible = false;
+      return;
+    }
+    let n = 0;
+    for (const c of connsOf[h]) {
+      const [a, b] = conns[c];
+      hiPos.set([a.x, a.y, a.z, b.x, b.y, b.z], n * 6);
+      n++;
+    }
+    hiGeo.attributes.position.needsUpdate = true;
+    hiGeo.setDrawRange(0, n * 2);
+    hoverPos.set([all[h].x, all[h].y, all[h].z]);
+    hoverGeo.attributes.position.needsUpdate = true;
+    hoverPt.visible = true;
+  };
+
+  const hoverFn = (px: number | null, py: number | null, camera: THREE.Camera, w: number, h: number) => {
+    nearest = -1;
+    nearestD = 1e9;
+    if (px === null || py === null) {
+      setHover(-1);
+      return false;
+    }
+    g.updateWorldMatrix(true, false);
+    for (let i = 0; i < N; i++) {
+      tmp.copy(all[i]).applyMatrix4(g.matrixWorld).project(camera);
+      if (tmp.z > 1) continue;
+      const sx = (tmp.x * 0.5 + 0.5) * w;
+      const sy = (-tmp.y * 0.5 + 0.5) * h;
+      const d = Math.hypot(sx - px, sy - py);
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = i;
+      }
+    }
+    setHover(nearest >= 0 && nearestD < (w > 900 ? 46 : 60) ? nearest : -1);
+    return hover >= 0;
+  };
+
+  const activateFn = (animated: boolean) => {
+    const n = hover >= 0 ? hover : nearestD < 110 ? nearest : -1;
+    if (n < 0) return false;
+    flash[n] = 1;
+    if (!animated) return true;
+    cp.forEach((p) => (p.on = false));
+    const L = layerOf[n];
+    let k = 0;
+    connIdx.forEach(([a, b]) => {
+      const la = layerOf[a];
+      const lb = layerOf[b];
+      let from = -1;
+      let to = -1;
+      let hops = 0;
+      if ((la === L && a === n) || la > L) {
+        from = a;
+        to = b;
+        hops = la - L; // forward through the network
+      } else if ((lb === L && b === n) || lb < L) {
+        from = b;
+        to = a;
+        hops = L - lb; // and backward, like backpropagation
+      }
+      if (from < 0 || k >= CP) return;
+      const p = cp[k++];
+      p.on = true;
+      p.a = from;
+      p.b = to;
+      p.t = -hops * HOP;
+    });
+    return true;
+  };
+
+  const interactStep = (dt: number) => {
+    for (let i = 0; i < CP; i++) {
+      const p = cp[i];
+      if (!p.on) {
+        cpPos[i * 3 + 1] = 1e4;
+        continue;
+      }
+      p.t += dt;
+      if (p.t < 0) {
+        cpPos[i * 3 + 1] = 1e4;
+        continue;
+      }
+      const u = p.t / HOP;
+      if (u >= 1) {
+        p.on = false;
+        flash[p.b] = 1; // the node lights up as the signal arrives
+        cpPos[i * 3 + 1] = 1e4;
+        continue;
+      }
+      const A = all[p.a];
+      const B = all[p.b];
+      cpPos.set([A.x + (B.x - A.x) * u, A.y + (B.y - A.y) * u, A.z + (B.z - A.z) * u], i * 3);
+    }
+    cpGeo.attributes.position.needsUpdate = true;
+
+    if (hover >= 0) flash[hover] = Math.max(flash[hover], 0.7);
+    const decay = Math.exp(-dt * 2.4);
+    for (let i = 0; i < N; i++) {
+      const f = Math.min(1, flash[i]);
+      for (let c = 0; c < 3; c++) {
+        const b = baseCol[i * 3 + c];
+        nc[i * 3 + c] = b + (1 - b) * f;
+      }
+      const nf = flash[i] * decay;
+      flash[i] = nf < 0.002 ? 0 : nf;
+    }
+    nodeGeo.attributes.color.needsUpdate = true;
+  };
+
   return {
     object: g,
+    interact: { hover: hoverFn, activate: activateFn },
     update: (_t, dt) => {
       g.rotation.y = Math.sin(_t * 0.25) * 0.7; // sway so the wide network stays broadside
       pulses.forEach((p, i) => {
@@ -220,6 +423,7 @@ function neural(): Shape {
       });
       pkGeo.attributes.position.needsUpdate = true;
       glyphs.update(dt);
+      interactStep(dt);
     },
     dispose: () => disposables.forEach((d) => d.dispose()),
   };

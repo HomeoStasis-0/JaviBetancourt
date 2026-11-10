@@ -129,7 +129,7 @@ export default function Cinematic() {
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     renderer.setSize(sizes.w, sizes.h);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, sizes.w > 900 ? 2 : 1.5));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 2.2;
 
@@ -158,7 +158,7 @@ export default function Cinematic() {
     pivot.add(current.object);
 
     // star particles: tiny, ice-white, spread through the whole scene
-    const STAR_COUNT = 1100;
+    const STAR_COUNT = sizes.w > 900 ? 1100 : 600;
     const SPAN = 7;
     const sp = new Float32Array(STAR_COUNT * 3);
     const sc = new Float32Array(STAR_COUNT * 3);
@@ -209,13 +209,56 @@ export default function Cinematic() {
     const fills = SLIDES.map((_, i) => root.querySelector<HTMLElement>(`#cin-fill-${i}`));
     const gdots = Array.from(root.querySelectorAll<HTMLElement>(".cin-gdot"));
 
+    // Keep every slide below the header line: if a slide is taller than the space between
+    // that line and the bottom of the screen, scale it down to fit. Never overlaps the header.
+    const header = root.querySelector<HTMLElement>(".cin-header");
+    const hline = root.querySelector<HTMLElement>(".cin-hline");
+    const fit = () => {
+      if (hline && header) hline.style.top = `${header.getBoundingClientRect().bottom}px`;
+      const lineY = hline ? hline.getBoundingClientRect().bottom : 0;
+      slideEls.forEach((el) => {
+        if (!el) return;
+        el.style.transformOrigin = "left bottom";
+        el.style.transform = "none"; // measure at natural size
+        const bottomOff = parseFloat(getComputedStyle(el).bottom) || 0;
+        const avail = window.innerHeight - bottomOff - lineY - 16;
+        const h = el.getBoundingClientRect().height;
+        const k = h > avail && h > 0 ? Math.max(0.3, avail / h) : 1;
+        el.style.transform = k < 1 ? `scale(${k})` : "none";
+      });
+    };
+    fit();
+    document.fonts?.ready.then(fit);
+    const fitImgs = Array.from(root.querySelectorAll<HTMLImageElement>(".cin-img img"));
+    fitImgs.forEach((im) => im.addEventListener("load", fit));
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+
     let currentScroll = 0;
     let shiftX = 0, shiftY = 0;
     let mouseX = 0, mouseY = 0, tMouseX = 0, tMouseY = 0;
     let cx = sizes.w / 2, cy = sizes.h / 2, ox = cx, oy = cy;
     const clock = new THREE.Clock();
 
+    // Pointer interaction with the network: hover to light a node, click or tap to fire a signal.
+    const canHover = window.matchMedia("(hover: hover)").matches;
+    let pointerSeen = false;
+    let overNode = false;
+    const onLeave = () => {
+      pointerSeen = false;
+    };
+    const onDown = (e: PointerEvent) => {
+      if (e.button > 0) return;
+      cx = e.clientX;
+      cy = e.clientY;
+      current.interact?.hover(cx, cy, camera, sizes.w, sizes.h);
+      current.interact?.activate(!reduce);
+    };
+    document.addEventListener("mouseleave", onLeave);
+    window.addEventListener("pointerdown", onDown, { passive: true });
+
     const onMove = (e: MouseEvent) => {
+      pointerSeen = true;
       cx = e.clientX;
       cy = e.clientY;
       if (innerRef.current) {
@@ -231,7 +274,7 @@ export default function Cinematic() {
       camera.aspect = sizes.w / sizes.h;
       camera.updateProjectionMatrix();
       renderer.setSize(sizes.w, sizes.h);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, sizes.w > 900 ? 2 : 1.5));
       uniforms.uResolution.value.set(sizes.w, sizes.h);
     };
     window.addEventListener("mousemove", onMove);
@@ -266,9 +309,18 @@ export default function Cinematic() {
       }
 
       const time = clock.getElapsedTime();
+      pivot.scale.setScalar(sizes.w > 900 ? 0.72 : 0.5);
       pivot.rotation.y = mouseX * 0.25;
       pivot.rotation.x = mouseY * 0.15;
       if (!reduce) current.update(time, dt);
+      const over = current.interact?.hover(canHover && pointerSeen ? cx : null, cy, camera, sizes.w, sizes.h) ?? false;
+      if (over !== overNode) {
+        overNode = over;
+        if (outerRef.current) {
+          outerRef.current.style.width = over ? "4rem" : "";
+          outerRef.current.style.height = over ? "4rem" : "";
+        }
+      }
 
       // stars drift, and swirl faster while scrolling
       const vel = Math.abs(target - currentScroll);
@@ -300,7 +352,7 @@ export default function Cinematic() {
       const idx = Math.max(0, Math.min(N - 1, Math.round(currentScroll * (N - 1))));
       const wide = sizes.w > 900;
       const tX = wide ? (SIDE[VARIANTS[idx]] ?? 0) * 0.2 * sizes.w : 0;
-      const tY = wide ? 0 : -0.16 * sizes.h;
+      const tY = wide ? 0 : -0.22 * sizes.h;
       shiftX += (tX - shiftX) * 0.04;
       shiftY += (tY - shiftY) * 0.04;
       camera.setViewOffset(sizes.w, sizes.h, -shiftX, -shiftY, sizes.w, sizes.h);
@@ -336,6 +388,11 @@ export default function Cinematic() {
       cancelAnimationFrame(raf);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("resize", fit);
+      window.removeEventListener("orientationchange", fit);
+      fitImgs.forEach((im) => im.removeEventListener("load", fit));
       links.forEach((a, i) => a.removeEventListener("click", clicks[i]));
       document.body.classList.remove("cinematic");
       current.dispose();
