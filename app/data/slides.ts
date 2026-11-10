@@ -28,10 +28,7 @@ export const SLIDES: Slide[] = [
     id: "intro",
     group: "intro",
     title: ["Javier", "Betancourt"],
-    paras: [
-      "Software Engineer working full-time, currently pursuing a Master of Science in Computer Science at UT Austin.",
-      "I studied Computer Science (minoring in Game Design & Development) at Texas A&M University, with a focus on game development and cybersecurity.",
-    ],
+    paras: [],
   },
   {
     id: "about-1",

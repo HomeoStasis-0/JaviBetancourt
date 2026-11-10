@@ -383,10 +383,12 @@ export default function Cinematic() {
               )}
               <SplitTitle lines={s.title} small={s.small} />
               {s.group === "intro" ? (
+                s.paras.length > 0 && (
                 <div className="cin-row">
                   <p className="cin-desc col-1">{s.paras[0]}</p>
                   <p className="cin-desc col-2">{s.paras[1]}</p>
                 </div>
+                )
               ) : (
                 <div className="cin-body">
                   {s.paras.map((p, pi) => (
